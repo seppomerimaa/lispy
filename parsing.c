@@ -20,6 +20,7 @@ void add_history(char* unused) {}
 #endif
 //#include <editline/history.h> don't need for OSX
 
+// cc -std=c99 -Wall parsing.c mpc.s -ledit -lm -o parsing
 int main(int argc, char** argv) {
   mpc_parser_t* Number = mpc_new("number");
   mpc_parser_t* Operator = mpc_new("operator");
@@ -27,7 +28,7 @@ int main(int argc, char** argv) {
   mpc_parser_t* Lispy = mpc_new("lispy");
 
   mpca_lang(MPCA_LANG_DEFAULT,
-    "number    : /-?\\d*.?\\d+/;"
+    "number    : /-?(\\d+\\.)?\\d+/;"
     "operator  : '+' | '-' | '*' | '/' ;"
     "expr      : <number> | '(' <operator> <expr>+ ')' ;"
     "lispy     : /^/ <operator> <expr>+ /$/ ;",
