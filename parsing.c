@@ -1,6 +1,7 @@
 #include "mpc.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 #ifdef _WIN32
 #include <string.h>
@@ -20,6 +21,54 @@ void add_history(char* unused) {}
 #endif
 //#include <editline/history.h> don't need for OSX
 
+// Note to self: these don't confer any real type safety. Oh whale.
+// possible lval types
+typedef enum { LVAL_NUM, LVAL_ERR } lval_type;
+// possible error types
+typedef enum { LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM } lval_err_type;
+
+typedef struct {
+  lval_type type;
+  double num;
+  lval_err_type err;
+} lval;
+
+// create an lval of type num
+lval lval_num(double num) {
+  lval v;
+  v.type = LVAL_NUM;
+  v.num = num;
+  return v;
+}
+// create an lval of type err
+lval lval_err(lval_err_type err) {
+  lval v;
+  v.type = LVAL_ERR;
+  v.err = err;
+  return v;
+}
+
+void lval_print(lval v) {
+  switch (v.type) {
+    case LVAL_NUM: printf("%f", v.num); break;
+    case LVAL_ERR: 
+      if (v.err == LERR_DIV_ZERO) {
+        printf("Error: division by zero");
+      } else if (v.err == LERR_BAD_OP) {
+        printf("Error: invalid operator");
+      } else if (v.err == LERR_BAD_NUM) {
+        printf("Error: invalid number");
+      } else {
+        printf("Error: へ？?");
+      }
+      break;
+  }
+}
+void lval_println(lval v) {
+  lval_print(v);
+  putchar('\n');
+}
+
 int number_of_nodes(mpc_ast_t* root) {
   if (root->children_num == 0) return 1;
   if (root->children_num >= 1) {
@@ -32,23 +81,45 @@ int number_of_nodes(mpc_ast_t* root) {
   return -1; // wut
 }
 
-long eval_op(long x, char* op, long y) {
-  if (strcmp(op, "+") == 0) { return x + y; }
-  if (strcmp(op, "-") == 0) { return x - y; }
-  if (strcmp(op, "*") == 0) { return x * y; }
-  if (strcmp(op, "/") == 0) { return x / y; }
-  return 0;
+lval eval_op(lval x, char* op, lval y) {
+  if (x.type == LVAL_ERR) { return x; }
+  if (y.type == LVAL_ERR) { return y; }
+
+  if (strcmp(op, "+") == 0) { return lval_num(x.num + y.num); }
+  if (strcmp(op, "-") == 0) { return lval_num(x.num - y.num); }
+  if (strcmp(op, "*") == 0) { return lval_num(x.num * y.num); }
+  if (strcmp(op, "/") == 0) {
+    if (y.num == 0) {
+      return lval_err(LERR_DIV_ZERO);
+    } else {
+      return lval_num(x.num / y.num);
+    }
+  }
+  if (strcmp(op, "%") == 0) {
+    if (y.num == 0) {
+      return lval_err(LERR_DIV_ZERO);
+    } else {
+      return lval_num(fmod(x.num, y.num));
+    }
+  }
+  return lval_err(LERR_BAD_OP);
 }
 
-long eval(mpc_ast_t* t) {
+lval eval(mpc_ast_t* t) {
   if (strstr(t->tag, "number")) {
-    return atoi(t->contents);
+    errno = 0;
+    long x = strtod(t->contents, NULL);
+    if (errno != ERANGE) {
+      return lval_num(x);
+    } else {
+      return lval_err(LERR_BAD_NUM);
+    }
   }
 
   /* Operator is always 2nd child */
   char* op = t->children[1]->contents;
 
-  long x = eval(t->children[2]);
+  lval x = eval(t->children[2]);
 
   int i = 3;
   while(strstr(t->children[i]->tag, "expr")) {
@@ -68,7 +139,7 @@ int main(int argc, char** argv) {
 
   mpca_lang(MPCA_LANG_DEFAULT,
     "number    : /-?(\\d+\\.)?\\d+/;"
-    "operator  : '+' | '-' | '*' | '/' ;"
+    "operator  : '+' | '-' | '*' | '/' | '%' ;"
     "expr      : <number> | '(' <operator> <expr>+ ')' ;"
     "lispy     : /^/ <operator> <expr>+ /$/ ;",
     Number, Operator, Expr, Lispy);
@@ -85,13 +156,13 @@ int main(int argc, char** argv) {
     if (mpc_parse("<stdin>", input, Lispy, &r)) {
       mpc_ast_print(r.output);
       mpc_ast_t* a = r.output;
-      printf("Tag: %s\n", a->tag);
-      printf("Contents: %s\n", a->contents);
-      printf("Number of children: %i\n", a->children_num);
-      printf("Number of nodes: %i\n", number_of_nodes(r.output));
+      /* printf("Tag: %s\n", a->tag); */
+      /* printf("Contents: %s\n", a->contents); */
+      /* printf("Number of children: %i\n", a->children_num); */
+      /* printf("Number of nodes: %i\n", number_of_nodes(r.output)); */
 
-      long result = eval(a);
-      printf("Result: %li\n", result);
+      lval result = eval(a);
+      lval_println(result);
       mpc_ast_delete(r.output);
     } else {
       mpc_err_print(r.error);
