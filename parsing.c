@@ -418,6 +418,28 @@ lval* builtin_join(lenv* e, lval* a) {
   return x;
 }
 
+// `a` should have as children 1) a list of variable names as a qexpr 2) a list of values of equal
+// length to the qexpr of variable names
+lval* builtin_def(lenv* e, lval* a) {
+  LASSERT(a, a->cell[0]->type == LVAL_QEXPR, "Function 'def' passed incorrect type.");
+  
+  // First elem should be a list of symbols
+  lval* syms = a->cell[0];
+  for(int i = 0; i < syms->count; i++) {
+    LASSERT(a, syms->cell[i]->type == LVAL_SYM, "Function 'def' cannot define non-symbols.");
+  }
+
+  LASSERT(a, syms->count == a->count-1, "Function 'def' cannot define"
+      "mismatched numbers of symbols and values.");
+
+  for (int i = 0; i < syms->count; i++) {
+    lenv_put(e, syms->cell[i], a->cell[i+1]);
+  }
+
+  lval_del(a);
+  return lval_sexpr();
+}
+
 lval* builtin_op(lenv * e, lval* a, char* op) {
   for (int i = 0; i < a->count; i++) {
     if (a->cell[i]->type != LVAL_NUM) { 
@@ -493,6 +515,7 @@ void lenv_add_builtins(lenv* e) {
   lenv_add_builtin(e, "last", builtin_last);
   lenv_add_builtin(e, "join", builtin_join);
   lenv_add_builtin(e, "eval", builtin_eval);
+  lenv_add_builtin(e, "def", builtin_def);
   lenv_add_builtin(e, "+", builtin_add);
   lenv_add_builtin(e, "-", builtin_sub);
   lenv_add_builtin(e, "*", builtin_mult);
