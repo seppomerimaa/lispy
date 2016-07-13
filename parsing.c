@@ -541,6 +541,13 @@ lval* builtin_env(lenv* e, lval* a) {
   return q;
 }
 
+lval* builtin_exit(lenv* e, lval* a) {
+  lenv_del(e);
+  // should clean up the MPC stuff but YOLO
+  printf("Exiting...\n");
+  exit(0);
+}
+
 lval* builtin_op(lenv * e, lval* a, char* op) {
   for (int i = 0; i < a->count; i++) {
     if (a->cell[i]->type != LVAL_NUM) { 
@@ -627,6 +634,7 @@ void lenv_add_builtins(lenv* e) {
   lenv_add_builtin(e, "eval", builtin_eval);
   lenv_add_builtin(e, "def", builtin_def);
   lenv_add_nullary_builtin(e, "env", builtin_env);
+  lenv_add_nullary_builtin(e, "exit", builtin_exit);
   lenv_add_builtin(e, "+", builtin_add);
   lenv_add_builtin(e, "-", builtin_sub);
   lenv_add_builtin(e, "*", builtin_mult);
@@ -636,7 +644,6 @@ void lenv_add_builtins(lenv* e) {
 
 lval* lval_eval(lenv* e, lval* v) {
   if(v->type == LVAL_SYM) {
-    printf("this is a symbol...\n");
     lval* x = lenv_get(e, v);
     /* lval_println(v); */
     /* lval_println(x); */
@@ -669,7 +676,7 @@ lval* lval_eval_sexpr(lenv* e, lval* v) {
   if (v->count == 0) { return v; }
 
   // single expression
-  if (v->count == 1) { printf("Evaling some singleton\n"); return lval_take(v, 0); }
+  if (v->count == 1) { return lval_take(v, 0); }
 
   // ensure first element is a symbol
   lval* f = lval_pop(v, 0);
@@ -724,7 +731,7 @@ int main(int argc, char** argv) {
       /* printf("Number of children: %i\n", a->children_num); */
       /* printf("Number of nodes: %i\n", number_of_nodes(r.output)); */
       lval* x = lval_read(r.output);
-      lval_println(e, x);
+      /* lval_println(e, x); */
       x = lval_eval(e, x);
       lval_println(e, x);
       lval_del(x);
