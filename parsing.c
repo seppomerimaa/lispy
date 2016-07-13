@@ -335,6 +335,7 @@ struct lenv {
   int count;
   char** syms;
   lval** vals;
+  bool* locks;
 };
 
 lenv* lenv_new(void) {
@@ -342,6 +343,7 @@ lenv* lenv_new(void) {
   e->count = 0;
   e->syms = NULL;
   e->vals = NULL;
+  e->locks = NULL;
   return e;
 }
 
@@ -352,6 +354,7 @@ void lenv_del(lenv* e) {
   }
   free(e->syms);
   free(e->vals);
+  free(e->locks);
   free(e);
 }
 
@@ -375,23 +378,29 @@ lval* lenv_get_name(lenv* e, lval* v) {
 
 // store lval v with the symbol from lval k. If there is already an entry for k->sym,
 // overwrite it.
-void lenv_put(lenv* e, lval* k, lval* v) {
+void lenv_put(lenv* e, lval* k, lval* v, bool locked) {
   /* printf("Adding entry for %s", k->sym); */
   /* lval_println(v); */
   // if we have an entry for k->sym, overwrite it
   for (int i = 0; i < e->count; i++) {
     if (strcmp(e->syms[i], k->sym) == 0) {
-      lval_del(e->vals[i]);
-      e->vals[i] = lval_copy(v);
+      if (!e->locks[i]) {
+        lval_del(e->vals[i]);
+        e->vals[i] = lval_copy(v);
+      } else {
+        printf("Cannot override builtin function <%s>\n", k->sym);
+      }
       return;
     }
   }
   e->count++;
   e->syms = realloc(e->syms, sizeof(char*) * e->count);
   e->vals = realloc(e->vals, sizeof(lval*) * e->count);
+  e->locks = realloc(e->locks, sizeof(bool) * e->count);
   e->syms[e->count - 1] = malloc(strlen(k->sym)+1);
   strcpy(e->syms[e->count - 1], k->sym);
   e->vals[e->count - 1] = lval_copy(v);
+  e->locks[e->count - 1] = locked;
 }
 
 // take the first expr in a qexpr and discard the rest
@@ -503,7 +512,7 @@ lval* builtin_def(lenv* e, lval* a) {
       "mismatched numbers of symbols (%i) and values (%i).", syms->count, a->count-1);
 
   for (int i = 0; i < syms->count; i++) {
-    lenv_put(e, syms->cell[i], a->cell[i+1]);
+    lenv_put(e, syms->cell[i], a->cell[i+1], false);
   }
 
   lval_del(a);
@@ -585,7 +594,7 @@ lval* builtin_mod(lenv* e, lval* a) {
 void lenv_add_builtin(lenv* e, char* name, lbuiltin func) {
   lval* k = lval_sym(name);
   lval* v = lval_fun(func);
-  lenv_put(e, k, v);
+  lenv_put(e, k, v, true);
   lval_del(k); lval_del(v);
 }
 
