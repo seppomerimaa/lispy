@@ -51,7 +51,7 @@ lval* lenv_get_name(lenv* e, lval* v);
 
 // Note to self: these don't confer any real type safety. Oh whale.
 // possible lval types
-typedef enum { LVAL_ERR, LVAL_NUM, LVAL_SYM, LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR } lval_type;
+typedef enum { LVAL_ERR, LVAL_NUM, LVAL_SYM, LVAL_FUN, LVAL_NFUN, LVAL_SEXPR, LVAL_QEXPR } lval_type;
 
 char* lval_name(lval_type type) {
   char* name;
@@ -64,6 +64,8 @@ char* lval_name(lval_type type) {
       name = "symbol"; break;
     case LVAL_FUN:
       name = "function"; break;
+    case LVAL_NFUN:
+      name = "nullary function"; break;
     case LVAL_SEXPR:
       name = "S-expression"; break;
     case LVAL_QEXPR:
@@ -130,6 +132,13 @@ lval* lval_fun(lbuiltin func) {
   return v;
 }
 
+lval* lval_nfun(lbuiltin func) {
+  lval* v = malloc(sizeof(lval));
+  v->type = LVAL_NFUN;
+  v->fun = func;
+  return v;
+}
+
 lval* lval_sexpr(void) {
   lval* v = malloc(sizeof(lval));
   v->type = LVAL_SEXPR;
@@ -157,6 +166,7 @@ void lval_del(lval* v) {
       free(v->sym);
       break;
     case LVAL_FUN:
+    case LVAL_NFUN:
       break;
     case LVAL_QEXPR:
     case LVAL_SEXPR:
@@ -179,6 +189,7 @@ bool lval_equal(lval* a, lval* b) {
     case LVAL_SYM:
       return strcmp(a->sym, b->sym);
     case LVAL_FUN:
+    case LVAL_NFUN:
       return a->fun == b->fun;
     case LVAL_QEXPR:
     case LVAL_SEXPR:
@@ -214,6 +225,7 @@ void lval_print(lenv* e, lval* v) {
       printf("%s", v->sym);
       break;
     case LVAL_FUN:
+    case LVAL_NFUN:
       printf("<%s>", lenv_get_name(e, v)->sym);
       break;
     case LVAL_SEXPR:
@@ -309,6 +321,7 @@ lval* lval_copy(lval* v) {
       x->num = v->num;
       break;
     case LVAL_FUN:
+    case LVAL_NFUN:
       x->fun = v->fun;
       break;
     case LVAL_ERR:
@@ -519,15 +532,13 @@ lval* builtin_def(lenv* e, lval* a) {
   return lval_sexpr();
 }
 
+// expects a to be NULL ... be careful~!
 lval* builtin_env(lenv* e, lval* a) {
-  lval_del(a);
-  lval* s = lval_sexpr();
+  lval* q = lval_qexpr();
   for (int i = 0; i < e->count; i++) {
-    lval_add(s, lval_sym(e->syms[i]));
+    lval_add(q, lval_sym(e->syms[i]));
   }
-  printf("printing env sexpr\n");
-  /* lval_print(s); */
-  return s;
+  return q;
 }
 
 lval* builtin_op(lenv * e, lval* a, char* op) {
@@ -597,6 +608,12 @@ void lenv_add_builtin(lenv* e, char* name, lbuiltin func) {
   lenv_put(e, k, v, true);
   lval_del(k); lval_del(v);
 }
+void lenv_add_nullary_builtin(lenv* e, char* name, lbuiltin func) {
+  lval* k = lval_sym(name);
+  lval* v = lval_nfun(func);
+  lenv_put(e, k, v, true);
+  lval_del(k); lval_del(v);
+}
 
 void lenv_add_builtins(lenv* e) {
   lenv_add_builtin(e, "list", builtin_list);
@@ -609,7 +626,7 @@ void lenv_add_builtins(lenv* e) {
   lenv_add_builtin(e, "join", builtin_join);
   lenv_add_builtin(e, "eval", builtin_eval);
   lenv_add_builtin(e, "def", builtin_def);
-  lenv_add_builtin(e, "env", builtin_env);
+  lenv_add_nullary_builtin(e, "env", builtin_env);
   lenv_add_builtin(e, "+", builtin_add);
   lenv_add_builtin(e, "-", builtin_sub);
   lenv_add_builtin(e, "*", builtin_mult);
@@ -619,11 +636,17 @@ void lenv_add_builtins(lenv* e) {
 
 lval* lval_eval(lenv* e, lval* v) {
   if(v->type == LVAL_SYM) {
-    /* printf("this is a symbol...\n"); */
+    printf("this is a symbol...\n");
     lval* x = lenv_get(e, v);
     /* lval_println(v); */
     /* lval_println(x); */
     lval_del(v);
+
+    if (x->type == LVAL_NFUN) {
+      lval* result = x->fun(e, NULL);
+      lval_del(x);
+      return result;
+    }
     return x;
   }
   if (v->type == LVAL_SEXPR) {
