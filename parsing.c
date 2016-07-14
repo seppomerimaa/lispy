@@ -46,6 +46,9 @@ typedef struct lenv lenv;
 lval* lval_eval_sexpr(lenv* e, lval* v);
 lval* lval_eval(lenv* e, lval* v);
 lval* lval_pop(lval* v, int i);
+lenv* lenv_new(void);
+lenv* lenv_copy(lenv* e);
+void lenv_del(lenv* e);
 lval* lenv_get_name(lenv* e, lval* v);
 
 
@@ -82,15 +85,19 @@ typedef lval* (*lbuiltin) (lenv*, lval*);
 
 struct lval {
   lval_type type;
-  double num;
 
-  // error & symbol types have some string data
+  // Basic
+  double num;
   char* err;
   char* sym;
 
-  lbuiltin fun;
+  // Function
+  lbuiltin builtin;
+  lenv* env;
+  lval* formals;
+  lval* body;
 
-  // count & pointer to list of lvals
+  // Expression
   int count;
   struct lval** cell;
 };
@@ -128,14 +135,27 @@ lval* lval_sym(char* s) {
 lval* lval_fun(lbuiltin func) {
   lval* v = malloc(sizeof(lval));
   v->type = LVAL_FUN;
-  v->fun = func;
+  v->builtin = func;
+  return v;
+}
+
+lval* lval_lambda(lval* formals, lval* body) {
+  lval* v = malloc(sizeof(lval));
+  v->type = LVAL_FUN;
+
+  v->builtin = NULL;
+
+  v->env = lenv_new();
+
+  v->formals = formals;
+  v->body = body;
   return v;
 }
 
 lval* lval_nfun(lbuiltin func) {
   lval* v = malloc(sizeof(lval));
   v->type = LVAL_NFUN;
-  v->fun = func;
+  v->builtin = func;
   return v;
 }
 
@@ -167,6 +187,11 @@ void lval_del(lval* v) {
       break;
     case LVAL_FUN:
     case LVAL_NFUN:
+      if (v->builtin != NULL) {
+        lenv_del(v->env);
+        lval_del(v->formals);
+        lval_del(v->body);
+      }
       break;
     case LVAL_QEXPR:
     case LVAL_SEXPR:
@@ -190,7 +215,10 @@ bool lval_equal(lval* a, lval* b) {
       return strcmp(a->sym, b->sym);
     case LVAL_FUN:
     case LVAL_NFUN:
-      return a->fun == b->fun;
+      if (a->builtin != b->builtin) { return false; }
+      if (a->builtin != NULL) { return true; }
+      // TODO should compare envs too!
+      return lval_equal(a->formals, b->formals) && lval_equal(a->body, b->body);
     case LVAL_QEXPR:
     case LVAL_SEXPR:
       if (a->num != b->num) { return false; }
@@ -226,7 +254,12 @@ void lval_print(lenv* e, lval* v) {
       break;
     case LVAL_FUN:
     case LVAL_NFUN:
-      printf("<%s>", lenv_get_name(e, v)->sym);
+      if (v->builtin) {
+        printf("<%s>", lenv_get_name(e, v)->sym);
+      } else {
+        printf("(\\ "); lval_print(e, v->formals);
+        putchar(' '); lval_print(e, v->body); putchar(')');
+      }
       break;
     case LVAL_SEXPR:
       lval_print_expr(e, v, '(', ')');
@@ -322,7 +355,14 @@ lval* lval_copy(lval* v) {
       break;
     case LVAL_FUN:
     case LVAL_NFUN:
-      x->fun = v->fun;
+      if (v->builtin) {
+        x->builtin = v->builtin;
+      } else {
+        x->builtin = NULL;
+        x->env = lenv_copy(v->env);
+        x->formals = lval_copy(v->formals);
+        x->body = lval_copy(v->body);
+      }
       break;
     case LVAL_ERR:
       x->err = malloc(strlen(v->err) + 1);
@@ -360,6 +400,22 @@ lenv* lenv_new(void) {
   return e;
 }
 
+lenv* lenv_copy(lenv* e) {
+  lenv* x = malloc(sizeof(lenv));
+  x->count = e->count;
+  x->syms = malloc(sizeof(char*) * e->count);
+  x->vals = malloc(sizeof(lval*) * e->count);
+  x->locks = malloc(sizeof(bool) * e->count);
+  for (int i = 0; i < e->count; i++) {
+    char* sym_cpy = malloc(strlen(e->syms[i] + 1));
+    strcpy(sym_cpy, e->syms[i]);
+    x->syms[i] = sym_cpy;
+    x->vals[i] = lval_copy(e->vals[i]);
+    x->locks[i] = e->locks[i];
+  }
+  return x;
+}
+
 void lenv_del(lenv* e) {
   for (int i = 0; i < e->count; i++) {
     free(e->syms[i]);
@@ -392,8 +448,6 @@ lval* lenv_get_name(lenv* e, lval* v) {
 // store lval v with the symbol from lval k. If there is already an entry for k->sym,
 // overwrite it.
 void lenv_put(lenv* e, lval* k, lval* v, bool locked) {
-  /* printf("Adding entry for %s", k->sym); */
-  /* lval_println(v); */
   // if we have an entry for k->sym, overwrite it
   for (int i = 0; i < e->count; i++) {
     if (strcmp(e->syms[i], k->sym) == 0) {
@@ -645,12 +699,10 @@ void lenv_add_builtins(lenv* e) {
 lval* lval_eval(lenv* e, lval* v) {
   if(v->type == LVAL_SYM) {
     lval* x = lenv_get(e, v);
-    /* lval_println(v); */
-    /* lval_println(x); */
     lval_del(v);
 
     if (x->type == LVAL_NFUN) {
-      lval* result = x->fun(e, NULL);
+      lval* result = x->builtin(e, NULL);
       lval_del(x);
       return result;
     }
@@ -687,7 +739,7 @@ lval* lval_eval_sexpr(lenv* e, lval* v) {
     return err;
   }
 
-  lval* result = f->fun(e, v);
+  lval* result = f->builtin(e, v);
   lval_del(f);
   return result;
 }
@@ -731,7 +783,6 @@ int main(int argc, char** argv) {
       /* printf("Number of children: %i\n", a->children_num); */
       /* printf("Number of nodes: %i\n", number_of_nodes(r.output)); */
       lval* x = lval_read(r.output);
-      /* lval_println(e, x); */
       x = lval_eval(e, x);
       lval_println(e, x);
       lval_del(x);
