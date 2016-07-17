@@ -25,6 +25,9 @@ void add_history(char* unused) {}
 #define LASSERT(args, cond, fmt, ...) \
   if (!(cond)) { lval* err = lval_err(fmt, ##__VA_ARGS__); lval_del(args); return err; }
 // Note to self: is there any point to this actually being a macro...?
+// Answer to self: it needs to be a macro so that we immediately return from the function
+// that uses the macro instead of having to check the result of an assert func and return
+// if it's an error.
 #define ASSERT_NUM_ARGS(args, num, func) \
   char buffer[1024]; \
   if (args->count < num) { \
@@ -36,7 +39,15 @@ void add_history(char* unused) {}
     lval_del(args); \
     snprintf(buffer, sizeof(buffer), "Function '%s' passed too many arguments. Expected %i but got %i.", func, num, args->count); \
     return lval_err(buffer); \
-  } \
+  }
+
+#define ASSERT_TYPE(args, index, expected, func) \
+  if (args->cell[index]->type != expected) { \
+    lval* err = lval_err("Function '%s' passed incorrect type; expected %s but got %s.", func, lval_name(expected), lval_name(a->cell[index]->type)); \
+    lval_del(a); \
+    return err; \
+  }
+
 
 // Forward declarations
 struct lval;
@@ -53,6 +64,7 @@ lval* lenv_get_name(lenv* e, lval* v);
 void lenv_put(lenv* e, lval* k, lval* v, bool locked);
 lval* builtin_eval(lenv* e, lval* a);
 lval* builtin_list(lenv* e, lval* a);
+lval* builtin_comparator(lenv* e, lval* a, char* op);
 
 
 // Note to self: these don't confer any real type safety. Oh whale.
@@ -775,6 +787,66 @@ lval* builtin_mod(lenv* e, lval* a) {
   return builtin_op(e, a, "%");
 }
 
+lval* builtin_equals(lenv* e, lval* a) {
+  ASSERT_NUM_ARGS(a, 2, "==");
+  lval* first = lval_pop(a, 0);
+  lval* second = lval_pop(a, 0);
+  lval_del(a);
+  bool equality = lval_equal(first, second);
+  lval_del(first);
+  lval_del(second);
+  if(equality) {
+    return lval_num(1);
+  } else {
+    return lval_num(0);
+  }
+}
+
+lval* builtin_nequals(lenv* e, lval* a) {
+  lval* eq = builtin_equals(e, a);
+  if (eq->num == 1) {
+    eq->num = 0;
+  } else {
+    eq->num = 1;
+  }
+  return eq;
+}
+
+lval* builtin_less_than(lenv* e, lval* a) {
+  return builtin_comparator(e, a, "<");
+}
+lval* builtin_less_than_or_equal(lenv* e, lval* a) {
+  return builtin_comparator(e, a, "<=");
+}
+lval* builtin_greater_than(lenv* e, lval* a) {
+  return builtin_comparator(e, a, ">");
+}
+lval* builtin_greater_than_or_equal(lenv* e, lval* a) {
+  return builtin_comparator(e, a, ">=");
+}
+
+lval* builtin_comparator(lenv* e, lval* a, char* op) {
+  ASSERT_NUM_ARGS(a, 2, op);
+  ASSERT_TYPE(a, 0, LVAL_NUM, op);
+  ASSERT_TYPE(a, 1, LVAL_NUM, op);
+  lval* first = lval_pop(a, 0);
+  lval* second = lval_pop(a, 0);
+  lval_del(a);
+  bool truth = false;
+  if (strcmp(op, "<") == 0 && first->num < second->num) { truth = true; }
+  if (strcmp(op, "<=") == 0 && first->num <= second->num) { truth = true; }
+  if (strcmp(op, ">") == 0 && first->num > second->num) { truth = true; }
+  if (strcmp(op, ">=") == 0 && first->num >= second->num) { truth = true; }
+  lval_del(first);
+  lval_del(second);
+  if (truth) {
+    return lval_num(1);
+  } else {
+    return lval_num(0);
+  }
+}
+
+
 void lenv_add_builtin(lenv* e, char* name, lbuiltin func) {
   lval* k = lval_sym(name);
   lval* v = lval_fun(func);
@@ -810,6 +882,12 @@ void lenv_add_builtins(lenv* e) {
   lenv_add_builtin(e, "*", builtin_mult);
   lenv_add_builtin(e, "/", builtin_div);
   lenv_add_builtin(e, "%", builtin_mod);
+  lenv_add_builtin(e, "==", builtin_equals);
+  lenv_add_builtin(e, "!=", builtin_nequals);
+  lenv_add_builtin(e, "<", builtin_less_than);
+  lenv_add_builtin(e, "<=", builtin_less_than_or_equal);
+  lenv_add_builtin(e, ">", builtin_greater_than);
+  lenv_add_builtin(e, ">=", builtin_greater_than_or_equal);
 }
 
 lval* lval_eval(lenv* e, lval* v) {
