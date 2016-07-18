@@ -57,6 +57,7 @@ typedef struct lenv lenv;
 lval* lval_eval_sexpr(lenv* e, lval* v);
 lval* lval_eval(lenv* e, lval* v);
 lval* lval_pop(lval* v, int i);
+void lval_println(lenv* e, lval* v);
 lenv* lenv_new(void);
 lenv* lenv_copy(lenv* e);
 void lenv_del(lenv* e);
@@ -69,7 +70,7 @@ lval* builtin_comparator(lenv* e, lval* a, char* op);
 
 // Note to self: these don't confer any real type safety. Oh whale.
 // possible lval types
-typedef enum { LVAL_ERR, LVAL_NUM, LVAL_SYM, LVAL_FUN, LVAL_NFUN, LVAL_SEXPR, LVAL_QEXPR } lval_type;
+typedef enum { LVAL_ERR, LVAL_NUM, LVAL_BOOL, LVAL_SYM, LVAL_FUN, LVAL_NFUN, LVAL_SEXPR, LVAL_QEXPR } lval_type;
 
 char* lval_name(lval_type type) {
   char* name;
@@ -78,6 +79,8 @@ char* lval_name(lval_type type) {
       name = "error"; break;
     case LVAL_NUM: 
       name = "number"; break;
+    case LVAL_BOOL:
+      name = "bool"; break;
     case LVAL_SYM:
       name = "symbol"; break;
     case LVAL_FUN:
@@ -106,6 +109,9 @@ struct lval {
   char* err;
   char* sym;
 
+  // Bool
+  bool boolean;
+
   // Function
   lbuiltin builtin;
   lenv* env;
@@ -122,6 +128,12 @@ lval* lval_num(double num) {
   lval* v = malloc(sizeof(lval));
   v->type = LVAL_NUM;
   v->num = num;
+  return v;
+}
+lval* lval_bool(bool b) {
+  lval* v = malloc(sizeof(lval));
+  v->type = LVAL_BOOL;
+  v->boolean = b;
   return v;
 }
 // create an lval of type err
@@ -193,6 +205,7 @@ lval* lval_qexpr(void) {
 void lval_del(lval* v) {
   switch (v->type) {
     case LVAL_NUM:
+    case LVAL_BOOL:
       break;
     case LVAL_ERR:
       free(v->err);
@@ -224,19 +237,22 @@ bool lval_equal(lval* a, lval* b) {
   switch (a->type) {
     case LVAL_NUM:
       return a->num == b->num;
+    case LVAL_BOOL:
+      return a->boolean == b->boolean;
     case LVAL_ERR:
       return strcmp(a->err, b->err);
     case LVAL_SYM:
       return strcmp(a->sym, b->sym);
     case LVAL_FUN:
     case LVAL_NFUN:
-      if (a->builtin != b->builtin) { return false; }
-      if (a->builtin != NULL) { return true; }
+      if (a->builtin || b->builtin) { return a->builtin == b->builtin; }
       // TODO should compare envs too!
       return lval_equal(a->formals, b->formals) && lval_equal(a->body, b->body);
     case LVAL_QEXPR:
     case LVAL_SEXPR:
-      if (a->num != b->num) { return false; }
+      /* lval_println(NULL, a); lval_println(NULL, b); */
+      /* printf("%i, %i\n", a->count); */
+      if (a->count != b->count) { return false; }
       for (int i = 0; i < a->num; i++) {
         if (!lval_equal(a->cell[i], b->cell[i])) { return false;}
       }
@@ -263,6 +279,13 @@ void lval_print(lenv* e, lval* v) {
       break;
     case LVAL_NUM:
       printf("%f", v->num);
+      break;
+    case LVAL_BOOL:
+      if (v->boolean) {
+        printf("true");
+      } else {
+        printf("false");
+      }
       break;
     case LVAL_SYM:
       printf("%s", v->sym);
@@ -367,6 +390,9 @@ lval* lval_copy(lval* v) {
   switch (v->type) {
     case LVAL_NUM:
       x->num = v->num;
+      break;
+    case LVAL_BOOL:
+      x->boolean = v->boolean;
       break;
     case LVAL_FUN:
     case LVAL_NFUN:
@@ -719,6 +745,7 @@ lval* builtin_env(lenv* e, lval* a) {
   return q;
 }
 
+// expects a to be NULL ... be careful~!
 lval* builtin_exit(lenv* e, lval* a) {
   lenv_del(e);
   // should clean up the MPC stuff but YOLO
@@ -795,21 +822,69 @@ lval* builtin_equals(lenv* e, lval* a) {
   bool equality = lval_equal(first, second);
   lval_del(first);
   lval_del(second);
-  if(equality) {
-    return lval_num(1);
-  } else {
-    return lval_num(0);
-  }
+  return lval_bool(equality);
 }
 
 lval* builtin_nequals(lenv* e, lval* a) {
   lval* eq = builtin_equals(e, a);
-  if (eq->num == 1) {
-    eq->num = 0;
-  } else {
-    eq->num = 1;
-  }
+  eq->boolean = !eq->boolean;
   return eq;
+}
+
+lval* builtin_and(lenv* e, lval* a) {
+  for (int i = 0; i < a->count; i++) {
+    ASSERT_TYPE(a, i, LVAL_BOOL, "&&");
+  }
+  bool truth = true;
+  while(a->count > 0) {
+    lval* x = lval_pop(a, 0);
+    truth = truth && x->boolean;
+    lval_del(x);
+  }
+  return lval_bool(truth);
+}
+lval* builtin_or(lenv* e, lval* a) {
+  for (int i = 0; i < a->count; i++) {
+    ASSERT_TYPE(a, i, LVAL_BOOL, "||");
+  }
+  bool truth = false;
+  while(a->count > 0) {
+    lval* x = lval_pop(a, 0);
+    truth = truth || x->boolean;
+    lval_del(x);
+  }
+  return lval_bool(truth);
+}
+lval* builtin_not(lenv* e, lval* a) {
+  ASSERT_NUM_ARGS(a, 1, "!");
+  ASSERT_TYPE(a, 0, LVAL_BOOL, "!");
+  lval* x = lval_take(a, 0);
+  x->boolean = !x->boolean;
+  return x;
+}
+
+// expects a to be NULL ... be careful~!
+lval* builtin_true(lenv* e, lval* a) {
+  return lval_bool(true);
+}
+lval* builtin_false(lenv* e, lval* a) {
+  return lval_bool(false);
+}
+
+lval* builtin_if(lenv* e, lval* a) {
+  ASSERT_NUM_ARGS(a, 3, "if");
+  ASSERT_TYPE(a, 0, LVAL_BOOL, "if");
+  ASSERT_TYPE(a, 1, LVAL_QEXPR, "if");
+  ASSERT_TYPE(a, 2, LVAL_QEXPR, "if");
+  lval* b = lval_pop(a, 0);
+  lval* x;
+  if(b->boolean) {
+    x = lval_take(a, 0);
+  } else {
+    x = lval_take(a, 1);
+  }
+  x->type = LVAL_SEXPR;
+  return lval_eval(e, x);
 }
 
 lval* builtin_less_than(lenv* e, lval* a) {
@@ -839,11 +914,7 @@ lval* builtin_comparator(lenv* e, lval* a, char* op) {
   if (strcmp(op, ">=") == 0 && first->num >= second->num) { truth = true; }
   lval_del(first);
   lval_del(second);
-  if (truth) {
-    return lval_num(1);
-  } else {
-    return lval_num(0);
-  }
+  return lval_bool(truth);
 }
 
 
@@ -877,6 +948,8 @@ void lenv_add_builtins(lenv* e) {
   lenv_add_builtin(e, "\\", builtin_lambda);
   lenv_add_nullary_builtin(e, "env", builtin_env);
   lenv_add_nullary_builtin(e, "exit", builtin_exit);
+  lenv_add_nullary_builtin(e, "true", builtin_true);
+  lenv_add_nullary_builtin(e, "false", builtin_false);
   lenv_add_builtin(e, "+", builtin_add);
   lenv_add_builtin(e, "-", builtin_sub);
   lenv_add_builtin(e, "*", builtin_mult);
@@ -884,6 +957,10 @@ void lenv_add_builtins(lenv* e) {
   lenv_add_builtin(e, "%", builtin_mod);
   lenv_add_builtin(e, "==", builtin_equals);
   lenv_add_builtin(e, "!=", builtin_nequals);
+  lenv_add_builtin(e, "&&", builtin_and);
+  lenv_add_builtin(e, "||", builtin_or);
+  lenv_add_builtin(e, "!", builtin_not);
+  lenv_add_builtin(e, "if", builtin_if);
   lenv_add_builtin(e, "<", builtin_less_than);
   lenv_add_builtin(e, "<=", builtin_less_than_or_equal);
   lenv_add_builtin(e, ">", builtin_greater_than);
@@ -950,7 +1027,7 @@ int main(int argc, char** argv) {
 
   mpca_lang(MPCA_LANG_DEFAULT,
     "number    : /-?(\\d+\\.)?\\d+/;"
-    "symbol    : /[a-zA-Z0-9_%+*\\-\\/\\\\=<>!&]+/ ;"
+    "symbol    : /[a-zA-Z0-9_%+*\\-\\/\\\\=<>!&|]+/ ;"
     "sexpr     : '(' <expr>* ')' ;"
     "qexpr     : '{' <expr>* '}' ;"
     "expr      : <number> | <symbol> | <sexpr> | <qexpr> ;"
